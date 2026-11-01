@@ -1,0 +1,101 @@
+name: Generate APIs JSON
+
+on:
+  workflow_dispatch: # Manual trigger button (Actions tab se ek click mein chalane ke liye)
+  schedule:
+    - cron: '0 0 * * 0' # Har Sunday automatically chalega taaki naye APIs update hote rahein
+
+permissions:
+  contents: write
+
+jobs:
+  build-json:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Parse README to JSON
+        run: |
+          python - << 'EOF'
+          import json
+          import re
+
+          def parse_readme():
+              with open("README.md", "r", encoding="utf-8") as f:
+                  lines = f.readlines()
+
+              apis = []
+              current_category = "General"
+
+              for line in lines:
+                  line = line.strip()
+
+                  # Category heading identify karna (jaise ### Animals)
+                  if line.startswith("### "):
+                      current_category = line.replace("### ", "").strip()
+                      continue
+
+                  # Markdown table row parse karna
+                  if line.startswith("|") and not line.startswith("|:---") and line.count("|") >= 3:
+                      cols = [c.strip() for c in line.split("|")]
+                      # cols[0] blank hota hai leading pipe ki wajah se, cols[1] API column, cols[2] Description
+                      if len(cols) >= 3:
+                          api_col = cols[1]
+                          desc_col = cols[2]
+
+                          if api_col.lower() in ["api", "name"] or "---" in api_col:
+                              continue
+
+                          # Markdown link [Name](URL) extract karna
+                          match = re.search(r'\[(.*?)\]\((.*?)\)', api_col)
+                          if match:
+                              name = match.group(1).strip()
+                              url = match.group(2).strip()
+                          else:
+                              name = api_col.strip()
+                              url = ""
+
+                          # Extra details: Auth, HTTPS, CORS agar table me ho
+                          auth_val = cols[3] if len(cols) > 3 else "Unknown"
+                          https_val = cols[4] if len(cols) > 4 else "Unknown"
+                          cors_val = cols[5] if len(cols) > 5 else "Unknown"
+
+                          if name and desc_col:
+                              apis.append({
+                                  "name": name,
+                                  "description": desc_col,
+                                  "category": current_category,
+                                  "url": url,
+                                  "auth": auth_val.replace("`", ""),
+                                  "https": https_val,
+                                  "cors": cors_val
+                              })
+
+              with open("apis.json", "w", encoding="utf-8") as out:
+                  json.dump(apis, out, ensure_ascii=False, indent=2)
+
+              print(f"Extraction successful: Total {len(apis)} APIs export ho gayi hain!")
+
+          parse_readme()
+          EOF
+
+      - name: Commit and Push apis.json
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add apis.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated update: apis.json generated [skip ci]" && git push)
+
+      - name: Upload JSON as Artifact (Optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-apis-json
+          path: apis.json
+          
