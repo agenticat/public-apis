@@ -1,20 +1,21 @@
 name: Generate APIs JSON
 
 on:
-  workflow_dispatch: # Manual trigger button (Actions tab se ek click mein chalane ke liye)
-  schedule:
-    - cron: '0 0 * * 0' # Har Sunday automatically chalega taaki naye APIs update hote rahein
+  push:
+    branches: [ master ]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-json:
+  build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,75 +28,69 @@ jobs:
           import json
           import re
 
-          def parse_readme():
-              with open("README.md", "r", encoding="utf-8") as f:
-                  lines = f.readlines()
+          apis = []
+          current_category = "General"
 
-              apis = []
-              current_category = "General"
+          with open("README.md", "r", encoding="utf-8") as f:
+              for line in f:
+                  raw_line = line.strip()
 
-              for line in lines:
-                  line = line.strip()
-
-                  # Category heading identify karna (jaise ### Animals)
-                  if line.startswith("### "):
-                      current_category = line.replace("### ", "").strip()
+                  # श्रेणी (Category) पहचानना
+                  if raw_line.startswith("### "):
+                      current_category = raw_line.replace("### ", "").strip()
                       continue
 
-                  # Markdown table row parse karna
-                  if line.startswith("|") and not line.startswith("|:---") and line.count("|") >= 3:
-                      cols = [c.strip() for c in line.split("|")]
-                      # cols[0] blank hota hai leading pipe ki wajah se, cols[1] API column, cols[2] Description
-                      if len(cols) >= 3:
-                          api_col = cols[1]
-                          desc_col = cols[2]
+                  # टेबल की पंक्तियाँ पहचानना
+                  if "|" in raw_line:
+                      parts = [p.strip() for p in raw_line.split("|")]
+                      cols = [p for p in parts if p != ""]
 
-                          if api_col.lower() in ["api", "name"] or "---" in api_col:
+                      if len(cols) >= 2:
+                          col1 = cols[0]
+                          col2 = cols[1]
+
+                          # टेबल हेडर या लाइन डिवाइडर छोड़ना
+                          if col1.lower() in ["api", "name"] or "---" in col1 or "---" in col2:
                               continue
 
-                          # Markdown link [Name](URL) extract karna
-                          match = re.search(r'\[(.*?)\]\((.*?)\)', api_col)
+                          # नाम और लिंक निकालना
+                          match = re.search(r'\[(.*?)\]\((.*?)\)', col1)
                           if match:
                               name = match.group(1).strip()
                               url = match.group(2).strip()
                           else:
-                              name = api_col.strip()
+                              name = col1.strip()
                               url = ""
 
-                          # Extra details: Auth, HTTPS, CORS agar table me ho
-                          auth_val = cols[3] if len(cols) > 3 else "Unknown"
-                          https_val = cols[4] if len(cols) > 4 else "Unknown"
-                          cors_val = cols[5] if len(cols) > 5 else "Unknown"
+                          auth = cols[2].replace("`", "") if len(cols) > 2 else "Unknown"
+                          https = cols[3] if len(cols) > 3 else "Unknown"
+                          cors = cols[4] if len(cols) > 4 else "Unknown"
 
-                          if name and desc_col:
+                          if name and col2:
                               apis.append({
                                   "name": name,
-                                  "description": desc_col,
+                                  "description": col2,
                                   "category": current_category,
                                   "url": url,
-                                  "auth": auth_val.replace("`", ""),
-                                  "https": https_val,
-                                  "cors": cors_val
+                                  "auth": auth,
+                                  "https": https,
+                                  "cors": cors
                               })
 
-              with open("apis.json", "w", encoding="utf-8") as out:
-                  json.dump(apis, out, ensure_ascii=False, indent=2)
+          with open("apis.json", "w", encoding="utf-8") as out:
+              json.dump(apis, out, ensure_ascii=False, indent=2)
 
-              print(f"Extraction successful: Total {len(apis)} APIs export ho gayi hain!")
-
-          parse_readme()
+          print(f"Extraction successful: {len(apis)} APIs extracted.")
           EOF
 
       - name: Commit and Push apis.json
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add apis.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated update: apis.json generated [skip ci]" && git push)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Automated: Generate apis.json [skip ci]"
+          file_pattern: 'apis.json'
 
-      - name: Upload JSON as Artifact (Optional)
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: public-apis-json
           path: apis.json
-          
